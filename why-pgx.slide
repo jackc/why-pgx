@@ -242,7 +242,7 @@ Copy directly to HTTP response
 
 * SelectFunc
 
-  When you need even more performance and control.
+When you need even more performance and control.
 
   user := User{}
   err := pool.SelectFunc("getUserByName", func(r *pgx.DataRowReader) (err error) {
@@ -260,10 +260,14 @@ A trivial test of selecting 10 rows from 10,000 shows that pq takes 31% longer t
   BenchmarkSQLPgxSelect10RowsByID    10000      110420 ns/op
   BenchmarkSQLPqSelect10RowsByID     10000      144704 ns/op
 
-- 9000+ reads per second on a single connection! (Late 2012 Mac Air)
+- 9000+ reads per second on a single connection! (Late 2012 MacBook Air)
 - Database driver is probably not performance bottleneck
 - But the extra speed is nice
 - Your milage may vary...
 - Bonus tip: Buffered reads make a huge difference
 
 .link https://github.com/JackC/pgx/blob/pgx-vs-pq/pgx_vs_pq_test.go
+
+* Check it out
+
+.link https://github.com/JackC/pgx
