@@ -1,0 +1,269 @@
+PGX - Native PostgreSQL Client
+
+Jack Christensen
+@j3c10
+http://www.jackchristensen.com
+
+* Why another PostgreSQL library?
+
+- It's fun
+- Chance to learn more about PostgreSQL
+- Did not want to use database/sql
+
+* Why not use database/sql interface?
+
+- Difficult access to advanced PostgreSQL features
+- Implicit connection pool
+- I wanted to see what a library targeting only PostgreSQL could do
+
+
+* What's cool about it?
+
+- Simple query interface
+- Simple prepared statement calling
+- Explicit connection pool with AfterConnect callback
+- Simple transaction interface
+- Supports transaction isolation levels
+- Listen / notify support
+- Configurable TLS
+- Custom transcoders
+- SelectValueTo
+- Logging
+- SelectFunc
+- Performance
+
+
+* Simple Query Interface
+
+Select a single value:
+
+  age := 18
+  count, err := conn.SelectValue("select count(*) from people where age > $1", age)
+  if err != nil {
+    return err
+  }
+  // count is interface{} containing an int64
+
+Select a single column (slice of values):
+
+  names, err := conn.SelectValues("select name from people where age > $1", age)
+  if err != nil {
+    return err
+  }
+  // names is interface{} containing an []string
+
+
+* Simple Query Interface (cont'd)
+
+Select a single row:
+
+  id := 1
+  person, err := conn.SelectRow("select * from people where id > $1", id)
+  if err != nil {
+    return err
+  }
+  // person is map[string]interface{}
+
+Select multiple rows:
+
+  people, err := conn.SelectRows("select * from people")
+  if err != nil {
+    return err
+  }
+  // people is []map[string]interface{}
+
+
+* Simple Prepared Statements
+
+  err := conn.Prepare("getUser", "select * from users where id=$1")
+  if err != nil {
+    return err
+  }
+  defer conn.Deallocate("getUser")
+
+All query methods that take SQL text also take prepared statement names.
+
+  user, err = conn.SelectRow("getUser", 1)
+  if err != nil {
+    return err
+  }
+
+
+* Explicit Connection Pool
+
+Connection pool has explicit maximum connections
+
+  options := pgx.ConnectionPoolOptions{MaxConnections: 2, AfterConnect: afterConnect}
+  pool, err := pgx.NewConnectionPool(*defaultConnectionParameters, options)
+  if err != nil {
+    return err
+  }
+  defer pool.Close()
+
+AfterConnect callback allows setting up all connections environment
+
+  func afterConnect(c *pgx.Connection) error {
+    // Set schema search path
+    // Set default sync commit
+    // Prepare statements
+    // etc.
+  }
+
+
+* Explicit Connection Pool (cont'd)
+
+Normal Acquire and Release style
+
+  conn, err := pool.Acquire()
+  if err != nil {
+    return nil
+  }
+  defer pool.Release(conn)
+
+Shortcuts for normal queries
+
+  pool.SelectValue(...)
+  pool.SelectValues(...)
+  pool.SelectRow(...)
+  pool.SelectRows(...)
+  pool.Execute(...)
+
+
+* Simple Transaction Interface
+
+Pass function to Transaction.
+
+  committed, err = conn.Transaction(func() bool {
+    conn.Execute(...)
+    conn.Execute(...)
+    conn.Execute(...)
+    return true
+  })
+  if err != nil {
+    return err
+  }
+  if !committed {
+    return errors.New("Transaction was not committed")
+  }
+
+Return true to commit or false to rollback.
+
+
+* Transaction Isolation Levels
+
+PostgreSQL supports serializable transactions
+
+  committed, err = conn.TransactionIso("serializable", func() bool {
+    conn.Execute(...)
+    conn.Execute(...)
+    conn.Execute(...)
+    return true
+  })
+  if err != nil {
+    return err
+  }
+  if !committed {
+    return errors.New("Transaction was not committed")
+  }
+
+So does PGX.
+
+
+* Listen / Notify
+
+  conn.Listen("go")
+
+  if notification, err := conn.WaitForNotification(time.Minute); err != nil {
+      // do something with notification
+  }
+
+
+* Configurable TLS
+
+TLS needs are varied.
+
+- Client certificates
+- Trusted cerificate authorities
+- What to do for self-signed certificates
+
+pgx uses tls.Config so anything the PostgreSQL server and the Go TLS package support can be done
+
+
+* Custom Transcoders
+
+Transcoders map PostgreSQL oid types to text and binary transcoders.
+
+  type Point struct {
+    x float64
+    y float64
+  }
+
+  func decodePointFromText(mr *pgx.MessageReader, size int32) interface{} {
+    ...
+  }
+
+  func encodePoint(w *pgx.MessageWriter, value interface{}) {
+    ...
+  }
+
+  pgx.ValueTranscoders[pgx.Oid(600)] = &pgx.ValueTranscoder{
+    DecodeText: decodePointFromText,
+    EncodeTo:   encodePoint}
+
+Can add new types or override existing ones.
+
+
+* SelectValueTo
+
+Copy directly to HTTP response
+
+  func GetUnreadItemsHandler(w http.ResponseWriter, req *http.Request) {
+    w.Header().Set("Content-Type", "application/json")
+    if err := pool.SelectValueTo(w, "getUnreadItems"); err != nil {
+      http.Error(w, "Internal server error", http.StatusInternalServerError)
+    }
+  }
+
+- Great when using PostgreSQL JSON support
+- Improves performance by small but measurable amount
+
+
+* Logging
+
+  Pass in your own logger
+
+  type Logger interface {
+    Error(msg string)
+    Warning(msg string)
+    Info(msg string)
+    Debug(msg string)
+  }
+
+
+* SelectFunc
+
+  When you need even more performance and control.
+
+  user := User{}
+  err := pool.SelectFunc("getUserByName", func(r *pgx.DataRowReader) (err error) {
+    user.id = r.ReadValue().(int32)
+    user.name = r.ReadValue().(string)
+  }, "jack")
+
+
+* Performance
+
+A trivial test of selecting 10 rows from 10,000 shows that pq takes 31% longer than pgx.
+
+  jack@hk-47~/dev/go/src/github.com/JackC/pgx$ go test -bench=Select10
+  PASS
+  BenchmarkSQLPgxSelect10RowsByID    10000      110420 ns/op
+  BenchmarkSQLPqSelect10RowsByID     10000      144704 ns/op
+
+- 9000+ reads per second on a single connection! (Late 2012 Mac Air)
+- Database driver is probably not performance bottleneck
+- But the extra speed is nice
+- Your milage may vary...
+- Bonus tip: Buffered reads make a huge difference
+
+.link https://github.com/JackC/pgx/blob/pgx-vs-pq/pgx_vs_pq_test.go
